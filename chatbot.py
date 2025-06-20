@@ -1,4 +1,8 @@
 from openai import OpenAI
+import os
+import requests
+
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 
 class ChatBot:
@@ -6,8 +10,16 @@ class ChatBot:
     __START_TURN_MODEL__ = "<start_of_turn>model\n"
 
     def __init__(self):
+        response = requests.post(
+            f"{OLLAMA_HOST}/api/pull",
+            json={"model": "gemma3:4b"},
+        )
+        if response.ok:
+            print("Model is being pulled or is ready.")
+        else:
+            print("Error pulling model:", response.text)
         self.client = OpenAI(
-            base_url="http://localhost:11434/v1/",
+            base_url=f"{OLLAMA_HOST}/v1/",
             api_key="ollama",
         )
         self.response = ""
