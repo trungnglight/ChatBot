@@ -14,6 +14,9 @@ COPY pyproject.toml poetry.lock* ./
 RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi
 
+RUN curl -fsSL https://ollama.com/install.sh | sh
+RUN ollama pull "gemma3:4b"
+
 # Copy the rest of the codebase
 COPY . .
 

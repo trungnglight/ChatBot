@@ -1,15 +1,12 @@
 import streamlit as st
-from dotenv import load_dotenv
 from chatbot import ChatBot
-
-load_dotenv()
 
 
 class ChatBotPage:
     def __init__(_self):
         if "chat_messages" not in st.session_state:
             st.session_state.chat_messages = []
-        system_message = "Chỉ được sử dụng tiếng Việt và trả lời với ít nhất 10 từ"
+        system_message = "Chỉ được sử dụng tiếng Việt"
         _self.system_messages = {"role": "user", "content": system_message}
 
     @st.cache_resource(ttl=6000, max_entries=1, show_spinner="Initializing ChatBot...")

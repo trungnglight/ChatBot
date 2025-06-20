@@ -1,12 +1,4 @@
-from dotenv import load_dotenv
-from transformers.models.auto.tokenization_auto import AutoTokenizer
-from transformers.models.auto.modeling_auto import AutoModelForCausalLM
-import torch
-
-load_dotenv()
-
-
-# login(token=os.getenv("HF_READ_API_KEY"))
+from openai import OpenAI
 
 
 class ChatBot:
@@ -14,47 +6,26 @@ class ChatBot:
     __START_TURN_MODEL__ = "<start_of_turn>model\n"
 
     def __init__(self):
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "Qwen/Qwen3-4B",
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen3-4B",
-            device_map="auto",
-            torch_dtype="auto",
+        self.client = OpenAI(
+            base_url="http://localhost:11434/v1/",
+            api_key="ollama",
         )
         self.response = ""
 
-    def convert_message(self, role, message):
-        return f"<start_of_turn>{role}\n" + message + self.__END_TURN__
-
-    def get_full_prompt(self, messages: list[dict]) -> str:
-        prompt = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
-        return prompt
-
     def set_messages(self, messages: list[dict]):
-        prompt = self.get_full_prompt(messages)
-        self.create_response(prompt)
+        self.create_response(messages)
 
-    def create_response(self, prompt):
-        model_inputs = self.tokenizer([prompt], return_tensors="pt").to(
-            self.model.device
+    def create_response(self, prompt: list[dict]):
+        chat_completion = self.client.chat.completions.create(
+            model="gemma3:4b",
+            messages=prompt,
+            max_tokens=1200,
+            reasoning_effort="low",
+            temperature=0.2,
+            top_p=0.9,
         )
-        generated_ids = self.model.generate(**model_inputs, max_new_tokens=320)
-        output_ids = generated_ids[0][len(model_inputs.input_ids[0]) :].tolist()
-        try:
-            # rindex finding 151668 (</think>)
-            index = len(output_ids) - output_ids[::-1].index(151668)
-        except ValueError:
-            index = 0
-        result = self.tokenizer.decode(
-            output_ids[index:], skip_special_tokens=True
-        ).strip("\n")
-        self.response = result.replace("\n<end_of_turn>", "")
+        result = chat_completion.choices[0].message.content
+        self.response = result
 
     def get_response(self) -> str | None:
         return self.response
@@ -64,10 +35,10 @@ if __name__ == "__main__":
     active = True
     messages = []
     chatbot = ChatBot()
-    system_message = "Chỉ được sử dụng tiếng Việt"
+    system_message = "Chỉ được sử dụng tiếng Việt. Bạn là một trợ lý ảo nhanh và thẳng thắn. Tuyệt đối không giả lập suy nghĩ hay nhập liệu. Luôn luôn trả lời ngay lập tức và vào trọng tâm vấn đề."
     while active:
         user_input = input()
-        messages.append({"role": "user", "content": system_message})
+        messages.append({"role": "system", "content": system_message})
         messages.append({"role": "user", "content": user_input})
         chatbot.set_messages(messages)
         print(chatbot.get_response())
