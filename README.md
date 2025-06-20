@@ -1,2 +1,22 @@
 # ChatBot
-A simple ChatBot
+Website trò chuyện cùng trợ lý ảo
+
+# Cài đặt
+Docker repository: [ChatBot](https://hub.docker.com/r/trungnglight/chatbot-app "Docker")
+
+Cài đặt Python 3.11
+
+Tải xuống:
+```
+git clone https://github.com/trungnglight/ChatBot.git
+```
+
+Cài đặt các thư viện cần thiết:
+```
+pip install -r requirements.txt
+```
+
+Khởi chạy máy chủ:
+```
+streamlit run app.py
+```
