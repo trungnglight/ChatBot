@@ -1,18 +1,132 @@
 from openai import OpenAI
 import os
 import requests
+import pypdf
+import textwrap
+import numpy as np
+import faiss
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+LL_MODEL = "gemma3:4b"
+EMBEDDING_MODEL = "nomic-embed-text"
+CHUNK_SIZE = 500
+PDF_PATH = "engineering-software-products-global.pdf"
+
+
+class ChatBot_RAG:
+    def __init__(self):
+        response_llm = requests.post(
+            f"{OLLAMA_HOST}/api/pull",
+            json={"model": EMBEDDING_MODEL},
+        )
+        if response_llm.ok:
+            print("Model is being pulled or is ready.")
+        else:
+            print("Error pulling model:", response_llm.text)
+        response_embed = requests.post(
+            f"{OLLAMA_HOST}/api/pull",
+            json={"model": LL_MODEL},
+        )
+        if response_embed.ok:
+            print("Model is being pulled or is ready.")
+        else:
+            print("Error pulling model:", response_embed.text)
+        self.client = OpenAI(
+            base_url=f"{OLLAMA_HOST}/v1/",
+            api_key="ollama",
+        )
+        self.response = ""
+
+    def read_pdf(self, file_path: str):
+        pdf = pypdf.PdfReader(file_path)
+        text = ""
+        for page in pdf.pages:
+            text += page.extract_text() + "\n"
+        return text
+
+    def chunk_text(self, text, chunk_size=CHUNK_SIZE):
+        return textwrap.wrap(text, width=chunk_size, break_long_words=False)
+
+    def embed_texts(self, texts):
+        embeddings = []
+        for i in range(0, len(texts), 10):
+            batch = texts[i : i + 10]
+            response = self.client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
+            batch_embeddings = [
+                np.array(d.embedding, dtype="float32") for d in response.data
+            ]
+            embeddings.extend(batch_embeddings)
+        return np.array(embeddings)
+
+    def create_faiss_index(self, embeddings):
+        index = faiss.IndexFlatL2(embeddings.shape[1])
+        index.add(embeddings)
+        return index
+
+    def retrieve_chunks(self, query, index, chunks, k=3):
+        query_embedding = (
+            self.client.embeddings.create(model=EMBEDDING_MODEL, input=query)
+            .data[0]
+            .embedding
+        )
+        query_vec = np.array(query_embedding, dtype="float32").reshape(1, -1)
+        _, indices = index.search(query_vec, k)
+        return [chunks[i] for i in indices[0]]
+
+    def generate_answer(self, message: list[dict], context_chunks):
+        context = "\n\n".join(context_chunks)
+        prompt = message.copy()
+        prompt[-1][
+            "content"
+        ] = f"""
+            Dựa trên thông tin sau, hãy trả lời câu hỏi.
+
+            Thông tin:
+            {context}
+
+            Câu hỏi:
+            {[prompt[-1]["content"]]}
+
+            Trả lời:
+            """
+
+        response = self.client.chat.completions.create(
+            model=LL_MODEL,
+            messages=messages,
+            max_tokens=800,
+            reasoning_effort="low",
+            temperature=0.2,
+            top_p=0.9,
+        )
+        return response.choices[0].message.content
+
+    def set_messages(self, messages):
+        self.create_response(messages)
+
+    def create_response(self, messages):
+        pdf_text = self.read_pdf(PDF_PATH)
+        chunks = self.chunk_text(pdf_text)
+
+        # Bước 2: Tạo embedding và index
+        embeddings = self.embed_texts(chunks)
+        index = self.create_faiss_index(embeddings)
+
+        # Bước 3: Truy vấn
+        relevant_chunks = self.retrieve_chunks(
+            messages[-1].get("content"), index, chunks
+        )
+        print(relevant_chunks)
+        self.response = self.generate_answer(messages, relevant_chunks)
+
+    def get_response(self):
+        return self.response
 
 
 class ChatBot:
-    __END_TURN__ = "<end_of_turn>\n"
-    __START_TURN_MODEL__ = "<start_of_turn>model\n"
-
     def __init__(self):
         response = requests.post(
             f"{OLLAMA_HOST}/api/pull",
-            json={"model": "gemma3:4b"},
+            json={"model": LL_MODEL},
         )
         if response.ok:
             print("Model is being pulled or is ready.")
@@ -29,9 +143,9 @@ class ChatBot:
 
     def create_response(self, prompt: list[dict]):
         chat_completion = self.client.chat.completions.create(
-            model="gemma3:4b",
+            model=LL_MODEL,
             messages=prompt,
-            max_tokens=1200,
+            max_tokens=800,
             reasoning_effort="low",
             temperature=0.2,
             top_p=0.9,
@@ -46,11 +160,11 @@ class ChatBot:
 if __name__ == "__main__":
     active = True
     messages = []
-    chatbot = ChatBot()
-    system_message = "Chỉ được sử dụng tiếng Việt. Bạn là một trợ lý ảo nhanh và thẳng thắn. Tuyệt đối không giả lập suy nghĩ hay nhập liệu. Luôn luôn trả lời ngay lập tức và vào trọng tâm vấn đề."
+    chatbot = ChatBot_RAG()
+    system_message = "Chỉ được sử dụng tiếng Việt."
     while active:
         user_input = input()
-        messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": system_message})
         messages.append({"role": "user", "content": user_input})
         chatbot.set_messages(messages)
         print(chatbot.get_response())
