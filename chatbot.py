@@ -11,7 +11,7 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LL_MODEL = "gemma3:4b"
 EMBEDDING_MODEL = "nomic-embed-text"
 CHUNK_SIZE = 512
-PDF_PATH = "engineering-software-products-global.pdf"
+PDF_PATH = "engineering-software-products-global.pdf"  # Change to PDF you want to use
 
 
 class ChatBot_RAG:
