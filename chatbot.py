@@ -5,16 +5,17 @@ import pypdf
 import textwrap
 import numpy as np
 import faiss
+import copy
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LL_MODEL = "gemma3:4b"
 EMBEDDING_MODEL = "nomic-embed-text"
-CHUNK_SIZE = 500
+CHUNK_SIZE = 512
 PDF_PATH = "engineering-software-products-global.pdf"
 
 
 class ChatBot_RAG:
-    def __init__(self):
+    def __init__(self, pdf_path):
         response_llm = requests.post(
             f"{OLLAMA_HOST}/api/pull",
             json={"model": EMBEDDING_MODEL},
@@ -36,9 +37,15 @@ class ChatBot_RAG:
             api_key="ollama",
         )
         self.response = ""
+        pdf_text = self.read_pdf(pdf_path)
+        self.chunks = self.chunk_text(pdf_text)
+
+        # Bước 2: Tạo embedding và index
+        embeddings = self.embed_texts(self.chunks)
+        self.index = self.create_faiss_index(embeddings)
 
     def read_pdf(self, file_path: str):
-        pdf = pypdf.PdfReader(file_path)
+        pdf = pypdf.PdfReader(pdf)
         text = ""
         for page in pdf.pages:
             text += page.extract_text() + "\n"
@@ -75,7 +82,7 @@ class ChatBot_RAG:
 
     def generate_answer(self, message: list[dict], context_chunks):
         context = "\n\n".join(context_chunks)
-        prompt = message.copy()
+        prompt = copy.deepcopy(message)
         prompt[-1][
             "content"
         ] = f"""
@@ -92,7 +99,7 @@ class ChatBot_RAG:
 
         response = self.client.chat.completions.create(
             model=LL_MODEL,
-            messages=messages,
+            messages=prompt,
             max_tokens=800,
             reasoning_effort="low",
             temperature=0.2,
@@ -104,18 +111,11 @@ class ChatBot_RAG:
         self.create_response(messages)
 
     def create_response(self, messages):
-        pdf_text = self.read_pdf(PDF_PATH)
-        chunks = self.chunk_text(pdf_text)
-
-        # Bước 2: Tạo embedding và index
-        embeddings = self.embed_texts(chunks)
-        index = self.create_faiss_index(embeddings)
 
         # Bước 3: Truy vấn
         relevant_chunks = self.retrieve_chunks(
-            messages[-1].get("content"), index, chunks
+            messages[-1].get("content"), self.index, self.chunks
         )
-        print(relevant_chunks)
         self.response = self.generate_answer(messages, relevant_chunks)
 
     def get_response(self):
@@ -160,10 +160,10 @@ class ChatBot:
 if __name__ == "__main__":
     active = True
     messages = []
-    chatbot = ChatBot_RAG()
-    system_message = "Chỉ được sử dụng tiếng Việt."
+    chatbot = ChatBot_RAG(PDF_PATH)
+    system_message = "Bạn là một trợ lý ảo và câu trả lời bằng tiếng Việt của bạn được dịch từ thông tin được cung cấp bằng tiếng Anh. Nếu không thể lấy được câu trả lời trực tiếp từ thông tin được cung cấp, trả lời bằng: 'Tôi không có đủ thông tin để trả lời câu hỏi này'"
     while active:
-        user_input = input()
+        user_input = input("Viết câu hỏi\n")
         messages.append({"role": "user", "content": system_message})
         messages.append({"role": "user", "content": user_input})
         chatbot.set_messages(messages)

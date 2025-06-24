@@ -1,17 +1,19 @@
 import streamlit as st
-from chatbot import ChatBot
+from chatbot import ChatBot_RAG
+
+PDF_PATH = "engineering-software-products-global.pdf"  # Change to PDF you want to use
 
 
 class ChatBotPage:
     def __init__(_self):
         if "chat_messages" not in st.session_state:
             st.session_state.chat_messages = []
-        system_message = "Chỉ được sử dụng tiếng Việt"
+        system_message = "Bạn là một trợ lý ảo và câu trả lời bằng tiếng Việt của bạn được dịch từ thông tin được cung cấp bằng tiếng Anh. Nếu không thể lấy được câu trả lời trực tiếp từ thông tin được cung cấp, trả lời bằng: 'Tôi không có đủ thông tin để trả lời câu hỏi này'"
         _self.system_messages = {"role": "user", "content": system_message}
 
     @st.cache_resource(ttl=6000, max_entries=1, show_spinner="Initializing ChatBot...")
     def load_model(_self):
-        return ChatBot()
+        return ChatBot_RAG(PDF_PATH)
 
     def load(_self):
         st.header("# Trò chuyện")
