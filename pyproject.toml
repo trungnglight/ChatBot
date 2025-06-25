@@ -14,7 +14,6 @@ dependencies = [
     "accelerate",
     "hf_xet",
     "pypdf",
-    "faiss",
 ]
 
 [tool.poetry]

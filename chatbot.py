@@ -4,7 +4,6 @@ import requests
 import pypdf
 import textwrap
 import numpy as np
-import faiss
 import copy
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -41,44 +40,51 @@ class ChatBot_RAG:
         self.chunks = self.chunk_text(pdf_text)
 
         # Bước 2: Tạo embedding và index
-        embeddings = self.embed_texts(self.chunks)
-        self.index = self.create_faiss_index(embeddings)
+        self.embeddings = self.embed_texts(self.chunks)
 
     def read_pdf(self, file_path: str):
-        pdf = pypdf.PdfReader(pdf)
+        pdf = pypdf.PdfReader(file_path)
         text = ""
         for page in pdf.pages:
             text += page.extract_text() + "\n"
         return text
 
+    def create_embeddings(self, texts):
+        response = self.client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
+        return response
+
     def chunk_text(self, text, chunk_size=CHUNK_SIZE):
         return textwrap.wrap(text, width=chunk_size, break_long_words=False)
+
+    def cosine_similarity(self, vec1, vec2):
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return np.dot(vec1, vec2) / (norm1 * norm2)
 
     def embed_texts(self, texts):
         embeddings = []
         for i in range(0, len(texts), 10):
             batch = texts[i : i + 10]
-            response = self.client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
+            response = self.create_embeddings(batch)
             batch_embeddings = [
                 np.array(d.embedding, dtype="float32") for d in response.data
             ]
             embeddings.extend(batch_embeddings)
         return np.array(embeddings)
 
-    def create_faiss_index(self, embeddings):
-        index = faiss.IndexFlatL2(embeddings.shape[1])
-        index.add(embeddings)
-        return index
-
-    def retrieve_chunks(self, query, index, chunks, k=3):
-        query_embedding = (
-            self.client.embeddings.create(model=EMBEDDING_MODEL, input=query)
-            .data[0]
-            .embedding
-        )
-        query_vec = np.array(query_embedding, dtype="float32").reshape(1, -1)
-        _, indices = index.search(query_vec, k)
-        return [chunks[i] for i in indices[0]]
+    def retrieve_chunks(self, query, text_chunks, embeddings, k=3):
+        query_embedding = self.create_embeddings(query).data[0].embedding
+        similarity_scores = []
+        for i, chunk_embedding in enumerate(embeddings):
+            similarity_score = self.cosine_similarity(
+                np.array(query_embedding), np.array(chunk_embedding)
+            )
+            similarity_scores.append((i, similarity_score))
+        similarity_scores.sort(key=lambda x: x[1], reverse=True)
+        top_indices = [index for index, _ in similarity_scores[:k]]
+        return [text_chunks[index] for index in top_indices]
 
     def generate_answer(self, message: list[dict], context_chunks):
         context = "\n\n".join(context_chunks)
@@ -114,7 +120,7 @@ class ChatBot_RAG:
 
         # Bước 3: Truy vấn
         relevant_chunks = self.retrieve_chunks(
-            messages[-1].get("content"), self.index, self.chunks
+            messages[-1].get("content"), self.chunks, self.embeddings
         )
         self.response = self.generate_answer(messages, relevant_chunks)
 

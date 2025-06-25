@@ -27,7 +27,7 @@ class ChatBotPage:
             )
             messages = {"role": "user", "content": st.session_state.message}
             send = st.form_submit_button("Gửi")
-        if send:
+        if send and st.session_state.message != "":
             st.session_state.chat_messages.append(_self.system_messages)
             st.session_state.chat_messages.append(messages)
             chatbot.set_messages(st.session_state.chat_messages)
