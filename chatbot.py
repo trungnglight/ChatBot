@@ -134,7 +134,7 @@ class ChatBot_RAG:
 
         # Xử lý pdf
         self.response = ""
-        self.documents = ChromaDB().get_documents()
+        self.documents = ChromaDB(database_name=collection_name).get_documents()
 
     def generate_answer(self, message: list[dict], context_chunks: list[str]):
         context = "\n\n".join(context_chunks)

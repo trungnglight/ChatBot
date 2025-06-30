@@ -17,15 +17,7 @@ class ChatBotPage:
         ttl=6000, max_entries=1, show_spinner="Initializing local database..."
     )
     def init_database(_self):
-        return ChromaDB()
-
-    @st.cache_data(ttl=600, max_entries=1, show_spinner="Adding data...")
-    def add_data(_self, data):
-        database = _self.init_database()
-        with st.spinner(text="Adding data...!", show_time=True):
-            if st.session_state.file_uploader is not []:
-                for item in data:
-                    database.add_data(item)
+        return ChromaDB("local_doc")
 
     def load_chatbot(_self):
 
@@ -34,24 +26,32 @@ class ChatBotPage:
         chatbot = _self.init_model()
 
         st.sidebar.header("Thêm dữ liệu")
-        st.session_state.file_uploader = st.sidebar.file_uploader(
-            label="Thêm dữ liệu.",
-            accept_multiple_files=True,
-            type=["pdf", "docx", "txt"],
-        )
 
-        _self.add_data(st.session_state.file_uploader)
+        with st.sidebar.form("add_documents", border=False):
+            uploaded_files = st.file_uploader(
+                label="Thêm dữ liệu",
+                accept_multiple_files=True,
+                type=["pdf", "docx", "txt"],
+                label_visibility="collapsed",
+            )
+            file_send = st.form_submit_button("Tải lên")
+        database = _self.init_database()
+        with st.spinner(text="Adding data...!", show_time=True):
+            if file_send and uploaded_files is not []:
+                for item in uploaded_files:
+                    database.add_data(item)
 
-        with st.form("chat_message"):
+        with st.form("chat_message", border=False):
             st.text_input(
                 label="Trò chuyện với trợ lý ảo",
                 placeholder="...",
                 key="message",
+                label_visibility="collapsed",
             )
             messages = {"role": "user", "content": st.session_state.message}
-            send = st.form_submit_button("Gửi")
+            chat_send = st.form_submit_button("Gửi")
 
-        if send and st.session_state.message != "":
+        if chat_send and st.session_state.message != "":
             st.session_state.chat_messages.append(_self.system_messages)
             st.session_state.chat_messages.append(messages)
             chatbot.set_messages(st.session_state.chat_messages)
