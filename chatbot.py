@@ -20,7 +20,7 @@ OVERLAP_SIZE = 32
 
 class ChromaDB:
     def __init__(self, database_name: str = "local_doc"):
-        chroma_client = chromadb.PersistentClient(path="chroma")
+        self.chroma_client = chromadb.PersistentClient(path="chroma")
 
         # Tạo embedding và thêm vào ChromaDB
         embedding_function = OpenAIEmbeddingFunction(
@@ -29,7 +29,7 @@ class ChromaDB:
             model_name=EMBEDDING_MODEL,
         )
 
-        self.documents = chroma_client.get_or_create_collection(
+        self.documents = self.chroma_client.get_or_create_collection(
             name=database_name, embedding_function=embedding_function
         )
 
@@ -103,6 +103,9 @@ class ChromaDB:
             query_texts=query_text, n_results=top_k, include=["documents"]
         )
         return chunks
+
+    def delete_collection(self, name):
+        self.chroma_client.delete_collection(name)
 
 
 class ChatBot_RAG:

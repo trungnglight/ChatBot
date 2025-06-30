@@ -41,6 +41,10 @@ class ChatBotPage:
                 for item in uploaded_files:
                     database.add_data(item)
 
+        with st.spinner(text="Removing all uploaded data..."):
+            if st.sidebar.button("Remove all data"):
+                database.get_documents().delete()
+
         with st.form("chat_message", border=False):
             st.text_input(
                 label="Trò chuyện với trợ lý ảo",
