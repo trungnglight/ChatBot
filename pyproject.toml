@@ -1,6 +1,6 @@
 [project]
 name = "chatbot"
-version = "0.0.1"
+version = "0.1.0"
 description = "ChatBot webpage"
 authors = [
     {name = "Trung Nguyen",email = "trungquang123a@gmail.com"}
@@ -14,6 +14,8 @@ dependencies = [
     "accelerate",
     "hf_xet",
     "pypdf",
+    "python-docx",
+    "chromadb"
 ]
 
 [tool.poetry]

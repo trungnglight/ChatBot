@@ -2,19 +2,112 @@ from openai import OpenAI
 import os
 import requests
 import pypdf
-import textwrap
-import numpy as np
-import copy
+import docx
+from io import BytesIO
+import magic
+import chromadb
+from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from hashlib import sha256
+from copy import deepcopy
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LL_MODEL = "gemma3:4b"
 EMBEDDING_MODEL = "nomic-embed-text"
 CHUNK_SIZE = 512
-PDF_PATH = "engineering-software-products-global.pdf"  # Change to PDF you want to use
+PDF_PATH = "documents/"  # Change to PDF you want to use
+OVERLAP_SIZE = 32
+
+
+class ChromaDB:
+    def __init__(self, database_name: str = "local_doc"):
+        chroma_client = chromadb.PersistentClient(path="chroma")
+
+        # Tạo embedding và thêm vào ChromaDB
+        embedding_function = OpenAIEmbeddingFunction(
+            api_key="ollama",
+            api_base=f"{OLLAMA_HOST}/v1/",
+            model_name=EMBEDDING_MODEL,
+        )
+
+        self.documents = chroma_client.get_or_create_collection(
+            name=database_name, embedding_function=embedding_function
+        )
+
+    def get_documents(self):
+        return self.documents
+
+    def read_pdf(self, file_path) -> str:
+        pdf = pypdf.PdfReader(file_path)
+        text = ""
+        for page in pdf.pages:
+            text += page.extract_text() + "\n"
+        return text
+
+    def chunk_text(
+        self, text: str, chunk_size=CHUNK_SIZE, overlap=OVERLAP_SIZE
+    ) -> list[str]:
+        chunks = []
+        # Simple character-based chunking
+        for i in range(0, len(text), chunk_size - overlap):
+            chunk = text[i : i + chunk_size]
+            if chunk:  # Ensure we don't add empty chunks
+                chunks.append(chunk)
+
+        return chunks
+
+    def detect_file_type(_self, file: BytesIO):
+        # Reset stream to start
+        file.seek(0)
+
+        # Get MIME type from file header
+        mime = magic.Magic(mime=True)
+        mime_type = mime.from_buffer(file.read(64))
+        file.seek(0)
+
+        # Map MIME type to friendly label
+        mime_map = {
+            "application/pdf": "pdf",
+            "text/plain": "txt",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        }
+
+        return mime_map.get(mime_type, "unknown")
+
+    def add_data(self, document: BytesIO):
+        data = ""
+        file_type = self.detect_file_type(document)
+        if file_type == "pdf":
+            print("Pdf!")
+            data = self.read_pdf(document)
+        elif file_type == "txt":
+            print("Txt!")
+            data = document.read().decode(errors="ignore")
+        elif file_type == "docx":
+            print("Docx!")
+            doc = docx.Document(document)
+            data = "\n".join([p.text for p in doc.paragraphs])
+        else:
+            print("Unknown type")
+            exit()
+        chunks = self.chunk_text(data)
+        [
+            self.documents.upsert(
+                documents=chunk, ids=sha256(chunk.encode("utf-8")).hexdigest()
+            )
+            for chunk in chunks.copy()
+        ]
+        print("Ready!")
+
+    def get_chunks(self, query_text: str, top_k=3):
+        chunks = self.documents.query(
+            query_texts=query_text, n_results=top_k, include=["documents"]
+        )
+        return chunks
 
 
 class ChatBot_RAG:
-    def __init__(self, pdf_path):
+    def __init__(self, collection_name: str = "rag_documents"):
+        # Pull the LL model and the embedding model.
         response_llm = requests.post(
             f"{OLLAMA_HOST}/api/pull",
             json={"model": EMBEDDING_MODEL},
@@ -23,6 +116,7 @@ class ChatBot_RAG:
             print("Model is being pulled or is ready.")
         else:
             print("Error pulling model:", response_llm.text)
+
         response_embed = requests.post(
             f"{OLLAMA_HOST}/api/pull",
             json={"model": LL_MODEL},
@@ -31,64 +125,20 @@ class ChatBot_RAG:
             print("Model is being pulled or is ready.")
         else:
             print("Error pulling model:", response_embed.text)
-        self.client = OpenAI(
+
+        # Khởi tạo client cho các model
+        self.model_client = OpenAI(
             base_url=f"{OLLAMA_HOST}/v1/",
             api_key="ollama",
         )
+
+        # Xử lý pdf
         self.response = ""
-        pdf_text = self.read_pdf(pdf_path)
-        self.chunks = self.chunk_text(pdf_text)
+        self.documents = ChromaDB().get_documents()
 
-        # Bước 2: Tạo embedding và index
-        self.embeddings = self.embed_texts(self.chunks)
-
-    def read_pdf(self, file_path: str):
-        pdf = pypdf.PdfReader(file_path)
-        text = ""
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
-        return text
-
-    def create_embeddings(self, texts):
-        response = self.client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
-        return response
-
-    def chunk_text(self, text, chunk_size=CHUNK_SIZE):
-        return textwrap.wrap(text, width=chunk_size, break_long_words=False)
-
-    def cosine_similarity(self, vec1, vec2):
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        return np.dot(vec1, vec2) / (norm1 * norm2)
-
-    def embed_texts(self, texts):
-        embeddings = []
-        for i in range(0, len(texts), 10):
-            batch = texts[i : i + 10]
-            response = self.create_embeddings(batch)
-            batch_embeddings = [
-                np.array(d.embedding, dtype="float32") for d in response.data
-            ]
-            embeddings.extend(batch_embeddings)
-        return np.array(embeddings)
-
-    def retrieve_chunks(self, query, text_chunks, embeddings, k=3):
-        query_embedding = self.create_embeddings(query).data[0].embedding
-        similarity_scores = []
-        for i, chunk_embedding in enumerate(embeddings):
-            similarity_score = self.cosine_similarity(
-                np.array(query_embedding), np.array(chunk_embedding)
-            )
-            similarity_scores.append((i, similarity_score))
-        similarity_scores.sort(key=lambda x: x[1], reverse=True)
-        top_indices = [index for index, _ in similarity_scores[:k]]
-        return [text_chunks[index] for index in top_indices]
-
-    def generate_answer(self, message: list[dict], context_chunks):
+    def generate_answer(self, message: list[dict], context_chunks: list[str]):
         context = "\n\n".join(context_chunks)
-        prompt = copy.deepcopy(message)
+        prompt = deepcopy(message)
         prompt[-1][
             "content"
         ] = f"""
@@ -103,71 +153,40 @@ class ChatBot_RAG:
             Trả lời:
             """
 
-        response = self.client.chat.completions.create(
+        response = self.model_client.chat.completions.create(
             model=LL_MODEL,
             messages=prompt,
-            max_tokens=800,
+            max_tokens=400,
             reasoning_effort="low",
             temperature=0.2,
             top_p=0.9,
         )
         return response.choices[0].message.content
 
-    def set_messages(self, messages):
+    def get_chunks(self, query_text: str, top_k=3) -> list[list]:
+        chunks = self.documents.query(
+            query_texts=query_text, n_results=top_k, include=["documents"]
+        )
+        return chunks.get("documents")[0]
+
+    def set_messages(self, messages: list[dict]):
         self.create_response(messages)
 
-    def create_response(self, messages):
-
-        # Bước 3: Truy vấn
-        relevant_chunks = self.retrieve_chunks(
-            messages[-1].get("content"), self.chunks, self.embeddings
-        )
+    def create_response(self, messages: list[dict[str, str]]):
+        relevant_chunks = self.get_chunks(query_text=messages[-1]["content"], top_k=3)
+        print(relevant_chunks)
         self.response = self.generate_answer(messages, relevant_chunks)
 
     def get_response(self):
         return self.response
 
 
-class ChatBot:
-    def __init__(self):
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/pull",
-            json={"model": LL_MODEL},
-        )
-        if response.ok:
-            print("Model is being pulled or is ready.")
-        else:
-            print("Error pulling model:", response.text)
-        self.client = OpenAI(
-            base_url=f"{OLLAMA_HOST}/v1/",
-            api_key="ollama",
-        )
-        self.response = ""
-
-    def set_messages(self, messages: list[dict]):
-        self.create_response(messages)
-
-    def create_response(self, prompt: list[dict]):
-        chat_completion = self.client.chat.completions.create(
-            model=LL_MODEL,
-            messages=prompt,
-            max_tokens=800,
-            reasoning_effort="low",
-            temperature=0.2,
-            top_p=0.9,
-        )
-        result = chat_completion.choices[0].message.content
-        self.response = result
-
-    def get_response(self) -> str | None:
-        return self.response
-
-
 if __name__ == "__main__":
     active = True
     messages = []
-    chatbot = ChatBot_RAG(PDF_PATH)
-    system_message = "Bạn là một trợ lý ảo và câu trả lời bằng tiếng Việt của bạn được dịch từ thông tin được cung cấp bằng tiếng Anh. Nếu không thể lấy được câu trả lời trực tiếp từ thông tin được cung cấp, trả lời bằng: 'Tôi không có đủ thông tin để trả lời câu hỏi này'"
+    # ChromaDB(document_path=PDF_PATH, update_data=True)
+    chatbot = ChatBot_RAG()
+    system_message = "Bạn là một trợ lý ảo và câu trả lời của bạn được dịch từ thông tin được cung cấp bằng tiếng Anh sang ngôn ngữ của câu hỏi. Nếu không thể lấy được câu trả lời trực tiếp từ thông tin được cung cấp, trả lời 'Tôi không có đủ thông tin để trả lời câu hỏi này' theo ngôn ngữ của câu hỏi"
     while active:
         user_input = input("Viết câu hỏi\n")
         messages.append({"role": "user", "content": system_message})
