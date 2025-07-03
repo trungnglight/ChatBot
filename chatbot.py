@@ -1,14 +1,21 @@
-from openai import OpenAI
 import os
 import requests
 import pypdf
 import docx
 from io import BytesIO
 import magic
+
+from typing import TypedDict, List
+from langchain_openai import ChatOpenAI
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain.schema import BaseMessage, HumanMessage, AIMessage
+from langchain.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END
+from langchain_ollama.embeddings import OllamaEmbeddings
 import chromadb
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+
 from hashlib import sha256
-from copy import deepcopy
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 LL_MODEL = "gemma3:4b"
@@ -17,24 +24,52 @@ CHUNK_SIZE = 512
 PDF_PATH = "documents/"  # Change to PDF you want to use
 OVERLAP_SIZE = 32
 
+PROMPT = PromptTemplate.from_template(
+    """
+{system_message}
 
-class ChromaDB:
-    def __init__(self, database_name: str = "local_doc"):
-        chroma_client = chromadb.PersistentClient(path="chroma")
+Lịch sử nói chuyện:
+{chat_history}
 
+Ngữ cảnh:
+{context}
+
+Câu hỏi người dùng:
+{question}
+
+Câu trả lời:
+"""
+)
+
+
+class GraphState(TypedDict):
+    input: str
+    chat_history: List[BaseMessage]
+    context_docs: List[Document]
+    response: str
+
+
+class LangChainChromaDB:
+    def __init__(self, collection_name: str = "local_doc"):
         # Tạo embedding và thêm vào ChromaDB
-        embedding_function = OpenAIEmbeddingFunction(
-            api_key="ollama",
-            api_base=f"{OLLAMA_HOST}/v1/",
-            model_name=EMBEDDING_MODEL,
+        embeddings = OllamaEmbeddings(
+            base_url=OLLAMA_HOST,
+            model=EMBEDDING_MODEL,
         )
 
-        self.documents = chroma_client.get_or_create_collection(
-            name=database_name, embedding_function=embedding_function
+        chroma_client = chromadb.PersistentClient("chroma")
+        self.doc_collection = chroma_client.get_or_create_collection(collection_name)
+
+        self.vector_store = Chroma(
+            persist_directory="chroma",
+            collection_name=collection_name,
+            embedding_function=embeddings,
         )
 
-    def get_documents(self):
-        return self.documents
+        self.retriever = self.vector_store.as_retriever()
+
+    def get_retriever(self):
+        return self.retriever
 
     def read_pdf(self, file_path) -> str:
         pdf = pypdf.PdfReader(file_path)
@@ -91,22 +126,23 @@ class ChromaDB:
             exit()
         chunks = self.chunk_text(data)
         [
-            self.documents.upsert(
+            self.vector_store.add_documents(
                 documents=chunk, ids=sha256(chunk.encode("utf-8")).hexdigest()
             )
             for chunk in chunks.copy()
         ]
         print("Ready!")
 
-    def get_chunks(self, query_text: str, top_k=3):
-        chunks = self.documents.query(
-            query_texts=query_text, n_results=top_k, include=["documents"]
-        )
+    def delete_all_data(self):
+        self.vector_store.delete()
+
+    def get_chunks(self, query: str, k=3):
+        chunks = self.vector_store.similarity_search(query=query, k=k)
         return chunks
 
 
 class ChatBot_RAG:
-    def __init__(self, collection_name: str = "rag_documents"):
+    def __init__(self, collection_name: str = "local_doc", system_message: str = ""):
         # Pull the LL model and the embedding model.
         response_llm = requests.post(
             f"{OLLAMA_HOST}/api/pull",
@@ -126,71 +162,118 @@ class ChatBot_RAG:
         else:
             print("Error pulling model:", response_embed.text)
 
+        self.system_message = system_message
+
         # Khởi tạo client cho các model
-        self.model_client = OpenAI(
+        graph_builder = StateGraph(GraphState)
+        self.llm = ChatOpenAI(
+            model=LL_MODEL,
+            temperature=0.2,
+            max_completion_tokens=400,
+            timeout=None,
+            max_retries=2,
             base_url=f"{OLLAMA_HOST}/v1/",
             api_key="ollama",
+            reasoning_effort="low",
+            top_p=0.9,
         )
+        graph_builder.add_node("retrieve", self.retrieve_node)
+        graph_builder.add_node("generate", self.generate_node)
+        graph_builder.add_node("update_memory", self.update_memory_node)
+
+        graph_builder.set_entry_point("retrieve")
+        graph_builder.add_edge("retrieve", "generate")
+        graph_builder.add_edge("generate", "update_memory")
+        graph_builder.add_edge("update_memory", END)
+        self.graph = graph_builder.compile()
+
+        self.llm_chain = PROMPT | self.llm
 
         # Xử lý pdf
         self.response = ""
-        self.documents = ChromaDB(database_name=collection_name).get_documents()
+        self.retriever = LangChainChromaDB(collection_name).get_retriever()
 
-    def generate_answer(self, message: list[dict], context_chunks: list[str]):
-        context = "\n\n".join(context_chunks)
-        prompt = deepcopy(message)
-        prompt[-1][
-            "content"
-        ] = f"""
-            Dựa trên thông tin sau, hãy trả lời câu hỏi.
+        self.state: GraphState = {
+            "input": "",
+            "chat_history": [],
+            "context_docs": [],
+            "response": "",
+        }
 
-            Thông tin:
-            {context}
-
-            Câu hỏi:
-            {[prompt[-1]["content"]]}
-
-            Trả lời:
-            """
-
-        response = self.model_client.chat.completions.create(
-            model=LL_MODEL,
-            messages=prompt,
-            max_tokens=400,
-            reasoning_effort="low",
-            temperature=0.2,
-            top_p=0.9,
+    def format_chat_history(self, history: List[BaseMessage]) -> str:
+        return "\n".join(
+            f"{'User' if m.type == 'human' else 'AI'}: {m.content}" for m in history
         )
-        return response.choices[0].message.content
 
-    def get_chunks(self, query_text: str, top_k=3) -> list[list]:
-        chunks = self.documents.query(
-            query_texts=query_text, n_results=top_k, include=["documents"]
+    def retrieve_node(self, state: GraphState) -> GraphState:
+        docs = self.retriever.invoke(state["input"])
+        return {**state, "context_docs": docs}
+
+    def generate_node(self, state: GraphState) -> GraphState:
+        if not state["context_docs"]:
+            return {
+                **state,
+                "response": "Tôi không có đủ thông tin để trả lời câu hỏi này.",
+            }
+
+        context = "\n\n".join(doc.page_content for doc in state["context_docs"])
+        chat_str = self.format_chat_history(state["chat_history"])
+
+        response = self.llm_chain.invoke(
+            {
+                "system_message": self.system_message,
+                "question": state["input"],
+                "context": context,
+                "chat_history": chat_str,
+            }
         )
-        return chunks.get("documents")[0]
 
-    def set_messages(self, messages: list[dict]):
-        self.create_response(messages)
+        return {**state, "response": response.text()}
 
-    def create_response(self, messages: list[dict[str, str]]):
-        relevant_chunks = self.get_chunks(query_text=messages[-1]["content"], top_k=3)
-        print(relevant_chunks)
-        self.response = self.generate_answer(messages, relevant_chunks)
+    def update_memory_node(self, state: GraphState) -> GraphState:
+        updated = state["chat_history"] + [
+            HumanMessage(content=state["input"]),
+            AIMessage(content=state["response"]),
+        ]
+        return {**state, "chat_history": updated}
+
+    def get_chat_history(self) -> List:
+        return self.state["chat_history"]
+
+    def generate_answer(self, message: str):
+        self.state["input"] = message
+        self.state["context_docs"] = []
+        self.state = self.graph.invoke(self.state)
+
+    def set_messages(self, message: str):
+        self.generate_answer(message)
 
     def get_response(self):
-        return self.response
+        return self.state["response"]
+
+    def get_current_state(self):
+        return self.state
+
+    def set_state(self, key: str, value):
+        if key in ["input", "response", "context", "chat_history"]:
+            self.state[key] = value
+        else:
+            print("Key not found!")
 
 
 if __name__ == "__main__":
     active = True
     messages = []
     # ChromaDB(document_path=PDF_PATH, update_data=True)
-    chatbot = ChatBot_RAG()
+
     system_message = "Bạn là một trợ lý ảo và câu trả lời của bạn được dịch từ thông tin được cung cấp bằng tiếng Anh sang ngôn ngữ của câu hỏi. Nếu không thể lấy được câu trả lời trực tiếp từ thông tin được cung cấp, trả lời 'Tôi không có đủ thông tin để trả lời câu hỏi này' theo ngôn ngữ của câu hỏi"
+    chatbot = ChatBot_RAG(system_message=system_message)
     while active:
-        user_input = input("Viết câu hỏi\n")
-        messages.append({"role": "user", "content": system_message})
-        messages.append({"role": "user", "content": user_input})
-        chatbot.set_messages(messages)
-        print(chatbot.get_response())
+        user_input = input("You: ")
+        if user_input.lower() in ["exit", "quit"]:
+            print("\nChat History:")
+            print(chatbot.get_chat_history())
+            break
+        chatbot.set_messages(user_input)
+        print(f"AI: {chatbot.get_response()}\n")
     exit(0)

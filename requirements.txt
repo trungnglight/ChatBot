@@ -7,3 +7,8 @@ hf_xet
 pypdf
 python-docx
 chromadb
+langchain
+langchain-openai
+langchain-ollama
+langchain-community
+langchain-chroma

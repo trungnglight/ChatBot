@@ -15,7 +15,12 @@ dependencies = [
     "hf_xet",
     "pypdf",
     "python-docx",
-    "chromadb"
+    "chromadb",
+    "langchain",
+    "langchain-openai",
+    "langchain-ollama",
+    "langchain-community",
+    "langchain-chroma",
 ]
 
 [tool.poetry]
