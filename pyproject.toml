@@ -21,6 +21,7 @@ dependencies = [
     "langchain-ollama",
     "langchain-community",
     "langchain-chroma",
+    "python-magic",
 ]
 
 [tool.poetry]

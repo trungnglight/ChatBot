@@ -146,7 +146,7 @@ class ChatBot_RAG:
         # Pull the LL model and the embedding model.
         response_llm = requests.post(
             f"{OLLAMA_HOST}/api/pull",
-            json={"model": EMBEDDING_MODEL},
+            json={"model": LL_MODEL},
         )
         if response_llm.ok:
             print("Model is being pulled or is ready.")
@@ -155,7 +155,7 @@ class ChatBot_RAG:
 
         response_embed = requests.post(
             f"{OLLAMA_HOST}/api/pull",
-            json={"model": LL_MODEL},
+            json={"model": EMBEDDING_MODEL},
         )
         if response_embed.ok:
             print("Model is being pulled or is ready.")

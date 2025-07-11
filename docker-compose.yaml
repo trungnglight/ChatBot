@@ -8,7 +8,7 @@ services:
       - ollama_data:/root/.ollama  # lưu trữ model
 
   app:
-    image: trungnglight/chatbot-app:latest
+    image: trungnglight/chatbot-app:langchain
     container_name: chatbot-app
     ports:
       - "8501:8501"
